@@ -145,17 +145,13 @@ class FullPowerExecutor:
         
         # Build the agent prompt
         prompt = self._build_agent_prompt(contract)
-        
-        # Write prompt to file (for claude --prompt-file)
-        prompt_file = workspace / ".agent_prompt.md"
-        prompt_file.write_text(prompt)
-        
+
         # Build environment
         env = self._build_environment(contract, workspace)
-        
-        # Build command
-        cmd = self._build_command(contract, workspace, prompt_file)
-        
+
+        # Build command (prompt will be passed via stdin)
+        cmd = self._build_command(contract, workspace)
+
         execution = AgentExecution(
             name=contract.name,
             workspace=workspace,
@@ -163,17 +159,24 @@ class FullPowerExecutor:
             started_at=datetime.now(),
         )
         self.executions[contract.name] = execution
-        
-        # Run Claude Code
+
+        # Run Claude Code with prompt via stdin
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=workspace,
                 env=env,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
             execution.process = process
+
+            # Write prompt to stdin and close it
+            process.stdin.write(prompt.encode('utf-8'))
+            await process.stdin.drain()
+            process.stdin.close()
+            await process.stdin.wait_closed()
             
             # Stream output
             output_lines = []
@@ -300,35 +303,33 @@ Work autonomously. Make decisions. Get it done.
         return env
     
     def _build_command(
-        self, 
-        contract: "Contract", 
+        self,
+        contract: "Contract",
         workspace: Path,
-        prompt_file: Path,
     ) -> list[str]:
         """
         Build the claude CLI command.
-        
+
         IMPORTANT: This spawns sub-agents with full autonomous permissions.
         Only use in isolated dev containers where this is safe.
+
+        Note: Prompt is passed via stdin to avoid shell argument length limits.
         """
         cmd = [self.claude_path]
-        
-        # Use prompt file
-        cmd.extend(["--prompt-file", str(prompt_file)])
-        
+
+        # Use print mode for non-interactive execution
+        cmd.append("--print")
+
         # CRITICAL: Skip permission prompts for autonomous execution
         # This is safe because we're in an isolated dev container
         cmd.append("--dangerously-skip-permissions")
-        
-        # Continue without asking (autonomous mode)
-        cmd.extend(["--yes"])
-        
+
         # Inherit MCP servers if configured
         if self.inherit_mcp:
             mcp_config = os.environ.get("CLAUDE_MCP_SERVERS")
             if mcp_config:
                 cmd.extend(["--mcp-config", mcp_config])
-        
+
         return cmd
     
     async def _copy_repo_to_workspace(self, workspace: Path) -> None:
