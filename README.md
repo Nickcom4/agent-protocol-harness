@@ -10,7 +10,7 @@ coordination** for the Agent Protocol v3.
 Clone and open in VS Code with Dev Containers extension - everything auto-configures:
 
 ```bash
-git clone https://github.com/nickcom4/agent-protocol-harness
+git clone https://github.com/Nickcom4/agent-protocol-harness
 code agent-protocol-harness
 # Click "Reopen in Container" when prompted
 ```
@@ -19,7 +19,7 @@ code agent-protocol-harness
 
 ```bash
 # Install from git
-pip install git+https://github.com/nickcom4/agent-protocol-harness.git
+pip install git+https://github.com/Nickcom4/agent-protocol-harness.git
 
 # Initialize in your project (creates CLAUDE.md and .mcp.json)
 aph-init
@@ -37,7 +37,7 @@ Add to your `.devcontainer/devcontainer.json`:
 
 ```json
 {
-  "postCreateCommand": "pip install git+https://github.com/nickcom4/agent-protocol-harness.git && aph-init"
+  "postCreateCommand": "pip install git+https://github.com/Nickcom4/agent-protocol-harness.git && aph-init"
 }
 ```
 
