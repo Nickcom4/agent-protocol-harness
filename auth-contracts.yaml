@@ -1,0 +1,128 @@
+# Example: Full-Stack Authentication
+# 
+# This demonstrates a multi-agent decomposition for adding
+# authentication to a full-stack application.
+#
+# Execution order: database → backend-auth → frontend-auth → integration
+# Parallelizable: database and backend-auth have no overlap
+
+agents:
+  # Database migrations - no dependencies, runs first
+  - name: database
+    scope:
+      - database/migrations/
+      - database/seeds/
+      - prisma/schema.prisma
+    cannot:
+      - backend/
+      - frontend/
+      - "*.md"
+    depends: []
+    expects: []
+    produces:
+      - User table with email, password_hash, created_at
+      - Session table with user_id, token, expires_at
+    verify:
+      - npx prisma migrate dev --name auth
+      - npx prisma db push
+    goal: |
+      Create database migrations for authentication:
+      - User table: id, email (unique), password_hash, created_at, updated_at
+      - Session table: id, user_id (FK), token (unique), expires_at, created_at
+      Use Prisma migrations.
+
+  # Backend auth service - depends on database
+  - name: backend-auth
+    scope:
+      - backend/routes/auth.js
+      - backend/middleware/auth.js
+      - backend/services/auth.service.js
+      - backend/utils/jwt.js
+    cannot:
+      - frontend/
+      - database/migrations/
+      - "*.md"
+    depends:
+      - READY:database
+    expects:
+      - User and Session tables exist
+      - Prisma client available
+    produces:
+      - POST /api/auth/register endpoint
+      - POST /api/auth/login endpoint
+      - POST /api/auth/logout endpoint
+      - GET /api/auth/me endpoint
+      - JWT middleware for protected routes
+    verify:
+      - npm test -- --grep "auth"
+      - "curl -X POST localhost:3000/api/auth/register -H 'Content-Type: application/json' -d '{\"email\":\"test@test.com\",\"password\":\"test123\"}' | grep -q 'token'"
+    goal: |
+      Implement JWT authentication:
+      - Register: validate email/password, hash password with bcrypt, create user, return JWT
+      - Login: validate credentials, create session, return JWT
+      - Logout: invalidate session
+      - Me: return current user from JWT
+      - Middleware: verify JWT, attach user to request
+      Use existing patterns from backend/routes/users.js
+
+  # Frontend auth - depends on backend endpoints
+  - name: frontend-auth
+    scope:
+      - frontend/src/pages/Login.jsx
+      - frontend/src/pages/Register.jsx
+      - frontend/src/context/AuthContext.jsx
+      - frontend/src/hooks/useAuth.js
+      - frontend/src/components/ProtectedRoute.jsx
+    cannot:
+      - backend/
+      - database/
+      - "*.md"
+    depends:
+      - READY:backend-auth
+    expects:
+      - POST /api/auth/register returns { token, user }
+      - POST /api/auth/login returns { token, user }
+      - GET /api/auth/me returns { user }
+    produces:
+      - Login page with form
+      - Register page with form
+      - AuthContext with login/logout/user state
+      - useAuth hook for components
+      - ProtectedRoute wrapper component
+    verify:
+      - npm run test:frontend -- --grep "auth"
+      - npm run build
+    goal: |
+      Create React authentication UI:
+      - Login page: email/password form, error handling, redirect on success
+      - Register page: email/password/confirm form, validation
+      - AuthContext: store user/token, provide login/logout functions
+      - useAuth hook: easy access to auth state and functions
+      - ProtectedRoute: redirect to login if not authenticated
+      Follow existing component patterns in frontend/src/components/
+
+  # Integration testing - runs after everything
+  - name: integration
+    scope:
+      - tests/e2e/
+      - cypress/
+    cannot:
+      - backend/
+      - frontend/src/
+      - database/migrations/
+    depends:
+      - READY:frontend-auth
+    expects:
+      - Full auth flow working end-to-end
+    produces:
+      - E2E test for register → login → access protected → logout flow
+    verify:
+      - npm run test:e2e
+    goal: |
+      Write E2E tests for the complete auth flow:
+      1. Register new user
+      2. Login with credentials
+      3. Access protected dashboard
+      4. Logout
+      5. Verify redirect to login when accessing protected route
+      Use Cypress with existing test patterns.
