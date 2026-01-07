@@ -3,21 +3,42 @@
 A multi-agent orchestration system that provides **true isolation and
 coordination** for the Agent Protocol v3.
 
-## Quick Start (Recommended: MCP Server)
+## Quick Start
 
-The harness runs as an MCP server that integrates with Claude Code:
+### Option 1: Dev Container (Recommended)
+
+Clone and open in VS Code with Dev Containers extension - everything auto-configures:
 
 ```bash
-sudo apt-get update && sudo apt-get install -y python3-pip
+git clone https://github.com/nickcom4/agent-protocol-harness
+code agent-protocol-harness
+# Click "Reopen in Container" when prompted
+```
 
-# Install
-pip install agent-harness
+### Option 2: Manual Install
 
-# Use with Claude Code CLI
-claude mcp add agent-harness "python -m agent_harness.mcp_server"
+```bash
+# Install from git
+pip install git+https://github.com/nickcom4/agent-protocol-harness.git
+
+# Initialize in your project (creates CLAUDE.md and .mcp.json)
+aph-init
+
+# Or manually add MCP server
+claude mcp add agent-protocol-harness "agent-protocol-harness-mcp"
 
 # Then just talk to Claude:
 # "Add authentication with JWT to my express/react app"
+```
+
+### Option 3: Add to Your Dev Container
+
+Add to your `.devcontainer/devcontainer.json`:
+
+```json
+{
+  "postCreateCommand": "pip install git+https://github.com/nickcom4/agent-protocol-harness.git && aph-init"
+}
 ```
 
 Claude will:

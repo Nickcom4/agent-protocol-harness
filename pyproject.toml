@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agent-harness"
+name = "agent-protocol-harness"
 version = "0.1.0"
 description = "Multi-agent orchestration harness with true isolation for the Agent Protocol"
 readme = "README.md"
@@ -54,11 +54,15 @@ all = [
 [project.scripts]
 agent-harness = "agent_harness.cli:main"
 agent-harness-mcp = "agent_harness.mcp_server:main"
+agent-protocol-harness = "agent_harness.cli:main"
+agent-protocol-harness-mcp = "agent_harness.mcp_server:main"
+aph = "agent_harness.cli:main"
+aph-init = "agent_harness.init:main"
 
 [project.urls]
-Homepage = "https://github.com/yourname/agent-harness"
-Documentation = "https://github.com/yourname/agent-harness#readme"
-Repository = "https://github.com/yourname/agent-harness"
+Homepage = "https://github.com/nickcom4/agent-protocol-harness"
+Documentation = "https://github.com/nickcom4/agent-protocol-harness#readme"
+Repository = "https://github.com/nickcom4/agent-protocol-harness"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent_harness"]

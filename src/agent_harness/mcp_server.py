@@ -9,7 +9,7 @@ Redesigned to address critical gaps:
 5. Git branching with checkpoint commits
 
 Usage with Claude Code CLI:
-  claude --mcp agent-harness="python -m agent_harness.mcp_server"
+  claude mcp add agent-harness "agent-harness-mcp"
 """
 
 import asyncio
