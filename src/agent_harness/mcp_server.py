@@ -34,6 +34,7 @@ from .persistence import SessionPersistence, SessionState, ContractPersist, get_
 from .verification import VerificationPlanner, VerificationCheck
 from .reconciler import ErrorReconciler, ResolutionChain
 from .executor import FullPowerExecutor
+from .passive_context import PassiveContextProvider
 
 logger = logging.getLogger(__name__)
 
@@ -51,32 +52,79 @@ class AgentHarnessMCP:
     
     def __init__(self, repo_root: Optional[Path] = None):
         self.repo_root = Path(repo_root or os.getcwd()).resolve()
-        
-        # Core components
-        self.persistence = SessionPersistence(self.repo_root)
-        self.verifier = VerificationPlanner(self.repo_root)
-        self.reconciler = ErrorReconciler(self.repo_root)
-        self.executor = FullPowerExecutor(self.repo_root)
-        
-        # Load or create session
-        self.state = self.persistence.load() or SessionState()
-        
-        # MCP Server
+
+        # Lazy-loaded components (only loaded when first used)
+        self._persistence: Optional[SessionPersistence] = None
+        self._verifier: Optional[VerificationPlanner] = None
+        self._reconciler: Optional[ErrorReconciler] = None
+        self._executor: Optional[FullPowerExecutor] = None
+        self._passive_context: Optional[PassiveContextProvider] = None
+        self._state: Optional[SessionState] = None
+
+        # MCP Server (lightweight initialization)
         self.server = Server("agent-harness")
         self._setup_tools()
         self._setup_resources()
+
+    # Lazy property accessors
+    @property
+    def persistence(self) -> SessionPersistence:
+        """Lazy-load persistence."""
+        if self._persistence is None:
+            self._persistence = SessionPersistence(self.repo_root)
+        return self._persistence
+
+    @property
+    def verifier(self) -> VerificationPlanner:
+        """Lazy-load verifier."""
+        if self._verifier is None:
+            self._verifier = VerificationPlanner(self.repo_root)
+        return self._verifier
+
+    @property
+    def reconciler(self) -> ErrorReconciler:
+        """Lazy-load reconciler."""
+        if self._reconciler is None:
+            self._reconciler = ErrorReconciler(self.repo_root)
+        return self._reconciler
+
+    @property
+    def executor(self) -> FullPowerExecutor:
+        """Lazy-load executor."""
+        if self._executor is None:
+            self._executor = FullPowerExecutor(self.repo_root)
+        return self._executor
+
+    @property
+    def passive_context(self) -> PassiveContextProvider:
+        """Lazy-load passive context provider."""
+        if self._passive_context is None:
+            self._passive_context = PassiveContextProvider(self.repo_root)
+        return self._passive_context
+
+    @property
+    def state(self) -> SessionState:
+        """Lazy-load state."""
+        if self._state is None:
+            self._state = self.persistence.load() or SessionState()
+        return self._state
+
+    @state.setter
+    def state(self, value: SessionState):
+        """Set state."""
+        self._state = value
     
     def _save(self):
         """Save state after every operation."""
         self.persistence.save(self.state)
     
     def _setup_resources(self):
-        """Expose session state as MCP resources."""
-        
+        """Expose session state and passive context as MCP resources."""
+
         @self.server.list_resources()
         async def list_resources():
             resources = []
-            
+
             # Current session status
             resources.append(Resource(
                 uri="agent://session/status",
@@ -84,38 +132,103 @@ class AgentHarnessMCP:
                 description="Current orchestration session state",
                 mimeType="application/json",
             ))
-            
+
             # Resume context (for new context windows)
-            if self.state.resume_context:
+            if self._state and self._state.resume_context:
                 resources.append(Resource(
                     uri="agent://session/resume",
                     name="Resume Context",
                     description="Context for resuming interrupted session",
                     mimeType="text/markdown",
                 ))
-            
+
+            # NEW: Passive context resources (always available)
+            resources.append(Resource(
+                uri="agent://context/codebase-summary",
+                name="Codebase Summary",
+                description="Auto-detected project structure, tech stack, and patterns",
+                mimeType="text/markdown",
+            ))
+
+            resources.append(Resource(
+                uri="agent://context/task-complexity",
+                name="Task Complexity Heuristic",
+                description="Real-time complexity assessment of current conversation",
+                mimeType="application/json",
+            ))
+
+            resources.append(Resource(
+                uri="agent://context/scope-suggestions",
+                name="Scope Suggestions",
+                description="Suggested file boundaries for potential splitting",
+                mimeType="application/json",
+            ))
+
             return resources
-        
+
         @self.server.read_resource()
         async def read_resource(uri: str):
             if uri == "agent://session/status":
                 return json.dumps(self._get_status_dict(), indent=2)
             elif uri == "agent://session/resume":
                 return get_resume_prompt(self.state)
+            elif uri == "agent://context/codebase-summary":
+                return self.passive_context.generate_codebase_summary()
+            elif uri == "agent://context/task-complexity":
+                # Default complexity for resource read (no task context)
+                return json.dumps({
+                    "note": "Use get_task_guidance tool for task-specific complexity assessment",
+                    "default_complexity": self.passive_context.assess_task_complexity([]),
+                }, indent=2)
+            elif uri == "agent://context/scope-suggestions":
+                return json.dumps(self.passive_context.suggest_scopes(), indent=2)
             return "Unknown resource"
     
     def _setup_tools(self):
         """Register MCP tools."""
-        
+
         @self.server.list_tools()
         async def list_tools():
             return [
-                # Session management
+                # NEW: Smart guidance tool (call first for EVERY task)
+                Tool(
+                    name="get_task_guidance",
+                    description="""
+                    Get smart guidance for any coding task.
+
+                    Call this FIRST before starting work on any task.
+                    Returns:
+                    - Recommended approach (direct vs orchestrated)
+                    - Scope suggestions (which files to focus on)
+                    - Verification steps (how to test)
+                    - Potential pitfalls
+
+                    This is a lightweight helper - use it for EVERY task, not just complex ones.
+                    For simple tasks, it returns guidance and stays dormant (minimal overhead).
+                    For complex tasks, it recommends orchestration tools.
+                    """,
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "task": {
+                                "type": "string",
+                                "description": "What the user wants to accomplish"
+                            },
+                            "context": {
+                                "type": "string",
+                                "description": "Optional: relevant context or constraints"
+                            }
+                        },
+                        "required": ["task"]
+                    }
+                ),
+
+                # Session management (for orchestration)
                 Tool(
                     name="check_session",
                     description="""
-                    CALL THIS FIRST in every conversation.
-                    Checks if there's an existing session to resume.
+                    Check for existing multi-agent orchestration session.
+                    Use after get_task_guidance recommends orchestration.
                     Returns session state or indicates fresh start.
                     """,
                     inputSchema={"type": "object", "properties": {}}
@@ -304,7 +417,153 @@ class AgentHarnessMCP:
                 return [TextContent(type="text", text=f"Error: {str(e)}")]
     
     # ==================== Tool Implementations ====================
-    
+
+    async def _tool_get_task_guidance(self, args: dict) -> str:
+        """
+        Smart assistant for every task.
+
+        Provides guidance without requiring full orchestration setup.
+        Uses dormant mode for simple tasks to minimize overhead.
+        """
+        task = args["task"]
+        context = args.get("context", "")
+
+        # Quick complexity check (no heavy loading for simple tasks)
+        quick_score = self.passive_context.quick_complexity_check(task)
+
+        if quick_score < 2:
+            # DORMANT MODE: Minimal overhead for simple tasks
+            return json.dumps({
+                "approach": "direct",
+                "recommendation": "Simple task - proceed directly without orchestration",
+                "complexity": {
+                    "score": quick_score,
+                    "signals": [],
+                    "recommend_orchestration": False,
+                },
+                "scope": ["Minimal changes - follow existing patterns"],
+                "verification": ["Run existing tests", "Manual verification"],
+                "pitfalls": [],
+                "dormant_mode": True,
+                "message": "MCP staying dormant for simple task (minimal overhead)",
+            }, indent=2)
+
+        # Complex enough - load full context
+        complexity = self.passive_context.assess_task_complexity([task, context])
+
+        # Get codebase summary (may use cache)
+        codebase = self.passive_context.generate_codebase_summary()
+
+        # Get scope suggestions
+        scopes = self.passive_context.suggest_scopes()
+
+        # Determine approach based on complexity
+        if complexity["complexity_score"] >= 5:
+            approach = "orchestrated"
+            recommendation = (
+                "This task is complex enough to benefit from multi-agent orchestration.\n"
+                "Consider calling check_session, then analyze_and_plan to create a structured plan."
+            )
+        elif complexity["complexity_score"] >= 3:
+            approach = "direct_with_checkpoints"
+            recommendation = (
+                "This task can be handled directly, but consider creating checkpoints.\n"
+                "Break work into logical steps and commit after each."
+            )
+        else:
+            approach = "direct"
+            recommendation = "This is a straightforward task - handle it directly without orchestration."
+
+        # Suggest scope based on task keywords
+        task_lower = task.lower()
+        scope_suggestion = []
+        for system, patterns in scopes.items():
+            if system in task_lower:
+                scope_suggestion.extend(patterns)
+
+        if not scope_suggestion:
+            scope_suggestion = ["Focus on minimal changes - follow existing patterns"]
+
+        # Suggest verification steps
+        verification = self._suggest_verification(task_lower)
+
+        # Identify pitfalls
+        pitfalls = self._identify_pitfalls(task, codebase)
+
+        guidance = {
+            "approach": approach,
+            "recommendation": recommendation,
+            "complexity": complexity,
+            "scope": scope_suggestion,
+            "verification": verification,
+            "pitfalls": pitfalls,
+            "codebase_context": codebase[:1000] + "..." if len(codebase) > 1000 else codebase,
+            "dormant_mode": False,
+        }
+
+        return json.dumps(guidance, indent=2)
+
+    def _suggest_verification(self, task: str) -> list:
+        """Suggest verification steps based on task type."""
+        steps = []
+
+        if any(word in task for word in ["test", "bug", "fix", "error"]):
+            steps.append("Run existing tests to ensure no regressions")
+
+        if any(word in task for word in ["api", "endpoint", "route"]):
+            steps.append("Test API endpoints with curl or Postman")
+            steps.append("Verify request/response schemas")
+
+        if any(word in task for word in ["frontend", "ui", "component", "page"]):
+            steps.append("Manually test in browser")
+            steps.append("Check responsive design")
+
+        if any(word in task for word in ["database", "schema", "migration", "model"]):
+            steps.append("Verify migration runs cleanly")
+            steps.append("Check data integrity")
+
+        if any(word in task for word in ["auth", "security", "login", "password"]):
+            steps.append("Test authorization boundaries")
+            steps.append("Verify error cases (invalid credentials, etc.)")
+
+        # Generic fallbacks
+        if not steps:
+            steps.append("Run linter and type checker")
+            steps.append("Manually verify the feature works as expected")
+
+        return steps
+
+    def _identify_pitfalls(self, task: str, codebase: str) -> list:
+        """Identify potential pitfalls based on task and codebase."""
+        pitfalls = []
+        task_lower = task.lower()
+
+        if any(word in task_lower for word in ["auth", "login", "password", "security"]):
+            pitfalls.append("Security: Ensure passwords are hashed, tokens are secure")
+            pitfalls.append("Session management: Consider token expiration and refresh")
+
+        if any(word in task_lower for word in ["database", "migration", "schema"]):
+            pitfalls.append("Data loss: Always include rollback logic in migrations")
+            pitfalls.append("Performance: Check for missing indexes on new columns")
+
+        if any(word in task_lower for word in ["api", "endpoint"]):
+            pitfalls.append("Validation: Validate all user inputs at API boundary")
+            pitfalls.append("Error handling: Return consistent error format")
+
+        if any(word in task_lower for word in ["refactor", "restructure"]):
+            pitfalls.append("Regressions: Run full test suite after refactoring")
+            pitfalls.append("Breaking changes: Check if refactor affects public APIs")
+
+        # Codebase-specific pitfalls
+        codebase_lower = codebase.lower()
+        if "monorepo" in codebase_lower:
+            pitfalls.append("Dependencies: Changes may affect multiple packages")
+
+        if "microservices" in codebase_lower:
+            pitfalls.append("Service boundaries: Ensure contracts between services remain stable")
+
+        return pitfalls
+
     async def _tool_check_session(self, args: dict) -> str:
         """Check for existing session or start fresh."""
         if self.state.session_id and self.state.phase != "not_started":

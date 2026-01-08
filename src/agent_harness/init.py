@@ -24,37 +24,45 @@ This is an isolated development environment where you can safely:
 
 ## Agent Protocol Harness MCP
 
-You have access to the **agent-protocol-harness** MCP server for multi-agent orchestration.
+You have access to the **agent-protocol-harness** MCP server for smart task guidance and optional multi-agent orchestration.
 
-### When to Use Multi-Agent
+### Getting Started
 
-Use agent-protocol-harness when the task:
+**Always call `get_task_guidance` first** for any coding task. It provides:
+- **Complexity assessment** - simple vs complex
+- **Recommended approach** - direct vs orchestrated
+- **Scope suggestions** - which files to focus on
+- **Verification steps** - how to test your changes
+- **Potential pitfalls** - things to watch out for
+
+For simple tasks, `get_task_guidance` returns guidance and stays dormant (minimal overhead).
+For complex tasks, it recommends the orchestration workflow below.
+
+### Quick Workflow
+
+```
+Simple task:
+1. get_task_guidance  → Returns guidance, stay dormant
+2. [do the work directly]
+3. Verify as suggested
+
+Complex task (when recommended):
+1. get_task_guidance  → Recommends orchestration
+2. check_session      → Resume existing or start fresh
+3. analyze_and_plan   → Propose agents + verification
+4. approve_plan       → Creates feature branch
+5. execute_next_agent → Runs with full Claude powers
+6. run_verification   → Automated + manual checks
+7. finalize_session   → Merge, keep, or discard
+```
+
+### When Orchestration is Recommended
+
+The MCP will suggest orchestration when the task:
 - Spans multiple systems (frontend + backend + database)
 - Would exceed 500 lines of changes
-- Has natural boundaries (different languages, frameworks, or concerns)
-- Benefits from parallel work streams
+- Has natural boundaries (different languages, frameworks)
 - Requires isolated verification per component
-
-Do NOT use agent-protocol-harness for:
-- Simple single-file changes
-- Tasks contained within one system
-- Quick fixes or small features
-- Questions or explanations
-
-### Workflow
-
-**Always start with `check_session`** to see if there's an interrupted session to resume.
-
-```
-1. check_session          → Resume existing or start fresh
-2. analyze_and_plan       → Propose agents + auto-generate verification
-3. [user reviews]         → Modify if needed
-4. approve_plan           → Creates feature branch
-5. execute_next_agent     → Runs with full Claude Code powers
-6. run_verification       → Automated + manual checks
-7. [iterate on feedback]  → Retry/adjust as needed
-8. finalize_session       → Merge, keep branch, or discard
-```
 
 ### Key Behaviors
 
@@ -145,9 +153,10 @@ Quick reference for agent-protocol-harness tools:
 
 | Tool | Purpose |
 |------|---------|
-| `check_session` | **Call first** - resume or start fresh |
-| `analyze_and_plan` | Create plan with verification |
-| `modify_plan` | Adjust based on feedback |
+| `get_task_guidance` | **Call first for every task** - get smart guidance |
+| `check_session` | Resume existing orchestration session |
+| `analyze_and_plan` | Create multi-agent plan with verification |
+| `modify_plan` | Adjust plan based on feedback |
 | `approve_plan` | Create branch, ready to execute |
 | `execute_next_agent` | Run next agent |
 | `get_execution_status` | Check progress |
@@ -156,6 +165,16 @@ Quick reference for agent-protocol-harness tools:
 | `handle_error` | Analyze and auto-fix errors |
 | `provide_feedback` | User feedback, trigger retry |
 | `finalize_session` | Merge, keep, or discard |
+
+## Passive Resources
+
+The MCP also provides passive context (no tool call required):
+
+| Resource | Content |
+|----------|---------|
+| `agent://context/codebase-summary` | Auto-detected project structure |
+| `agent://context/task-complexity` | Complexity assessment |
+| `agent://context/scope-suggestions` | File boundary suggestions |
 '''
 
 MCP_JSON_CONTENT = '''{
