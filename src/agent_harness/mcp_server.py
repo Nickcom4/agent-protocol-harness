@@ -35,6 +35,8 @@ from .verification import VerificationPlanner, VerificationCheck
 from .reconciler import ErrorReconciler, ResolutionChain
 from .executor import FullPowerExecutor
 from .passive_context import PassiveContextProvider
+from .workspace_monitor import WorkspaceMonitor
+from .task_analyzer import TaskAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,8 @@ class AgentHarnessMCP:
         self._reconciler: Optional[ErrorReconciler] = None
         self._executor: Optional[FullPowerExecutor] = None
         self._passive_context: Optional[PassiveContextProvider] = None
+        self._workspace_monitor: Optional[WorkspaceMonitor] = None
+        self._task_analyzer: Optional[TaskAnalyzer] = None
         self._state: Optional[SessionState] = None
 
         # MCP Server (lightweight initialization)
@@ -101,6 +105,20 @@ class AgentHarnessMCP:
         if self._passive_context is None:
             self._passive_context = PassiveContextProvider(self.repo_root)
         return self._passive_context
+
+    @property
+    def workspace_monitor(self) -> WorkspaceMonitor:
+        """Lazy-load workspace monitor."""
+        if self._workspace_monitor is None:
+            self._workspace_monitor = WorkspaceMonitor(self.repo_root)
+        return self._workspace_monitor
+
+    @property
+    def task_analyzer(self) -> TaskAnalyzer:
+        """Lazy-load task analyzer."""
+        if self._task_analyzer is None:
+            self._task_analyzer = TaskAnalyzer(self.repo_root, self.passive_context)
+        return self._task_analyzer
 
     @property
     def state(self) -> SessionState:
@@ -164,6 +182,43 @@ class AgentHarnessMCP:
                 mimeType="application/json",
             ))
 
+            # NEW: Workspace health resources
+            resources.append(Resource(
+                uri="agent://workspace/dependency-status",
+                name="Dependency Issues",
+                description="READ FIRST: Missing packages that may block execution. Contains install commands.",
+                mimeType="text/markdown",
+            ))
+
+            resources.append(Resource(
+                uri="agent://workspace/health-check",
+                name="Workspace Health",
+                description="Configuration issues and quick fixes for the development environment",
+                mimeType="text/markdown",
+            ))
+
+            # NEW: Task guidance resources (passive versions)
+            resources.append(Resource(
+                uri="agent://guidance/task-analysis",
+                name="Task Analysis",
+                description="Auto-detected task complexity and approach recommendations",
+                mimeType="text/markdown",
+            ))
+
+            resources.append(Resource(
+                uri="agent://guidance/quick-start",
+                name="Quick Start Guide",
+                description="Recommended first steps based on workspace and task analysis",
+                mimeType="text/markdown",
+            ))
+
+            resources.append(Resource(
+                uri="agent://guidance/verification-checklist",
+                name="Verification Checklist",
+                description="Suggested verification steps for current task",
+                mimeType="text/markdown",
+            ))
+
             return resources
 
         @self.server.read_resource()
@@ -182,6 +237,16 @@ class AgentHarnessMCP:
                 }, indent=2)
             elif uri == "agent://context/scope-suggestions":
                 return json.dumps(self.passive_context.suggest_scopes(), indent=2)
+            elif uri == "agent://workspace/dependency-status":
+                return self.workspace_monitor.format_dependency_report()
+            elif uri == "agent://workspace/health-check":
+                return self.workspace_monitor.format_health_report()
+            elif uri == "agent://guidance/task-analysis":
+                return self.task_analyzer.analyze_current_context()
+            elif uri == "agent://guidance/quick-start":
+                return self._generate_quick_start_guide()
+            elif uri == "agent://guidance/verification-checklist":
+                return self.task_analyzer.generate_verification_checklist()
             return "Unknown resource"
     
     def _setup_tools(self):
@@ -196,16 +261,20 @@ class AgentHarnessMCP:
                     description="""
                     Get smart guidance for any coding task.
 
-                    Call this FIRST before starting work on any task.
+                    TIP: Task guidance is now also available via passive resources:
+                    - agent://guidance/task-analysis (approach recommendations)
+                    - agent://workspace/dependency-status (missing packages)
+                    - agent://guidance/quick-start (actionable guide)
+
+                    Use this tool when you need to provide a specific task description
+                    for more accurate analysis. The resources above provide context
+                    based on git state and workspace analysis.
+
                     Returns:
                     - Recommended approach (direct vs orchestrated)
                     - Scope suggestions (which files to focus on)
                     - Verification steps (how to test)
                     - Potential pitfalls
-
-                    This is a lightweight helper - use it for EVERY task, not just complex ones.
-                    For simple tasks, it returns guidance and stays dormant (minimal overhead).
-                    For complex tasks, it recommends orchestration tools.
                     """,
                     inputSchema={
                         "type": "object",
@@ -563,6 +632,56 @@ class AgentHarnessMCP:
             pitfalls.append("Service boundaries: Ensure contracts between services remain stable")
 
         return pitfalls
+
+    def _generate_quick_start_guide(self) -> str:
+        """
+        Generate combined quick start guide.
+
+        Combines dependency status + task analysis into actionable guide.
+        """
+        # Get dependency status
+        dep_status = self.workspace_monitor.get_quick_status()
+        has_dep_issues = "missing" in dep_status.lower() or "critical" in dep_status.lower()
+
+        # Get task analysis
+        task_analysis = self.task_analyzer.analyze_current_context()
+
+        # Build guide
+        lines = ["# Quick Start Guide"]
+
+        # Step 1: Dependencies (only if issues)
+        if has_dep_issues:
+            lines.append("\n## Step 1: Resolve Dependencies")
+            lines.append(dep_status)
+            lines.append("\n[Full report: `agent://workspace/dependency-status`]")
+        else:
+            lines.append("\n## Step 1: Dependencies")
+            lines.append("All dependencies are installed.")
+
+        # Step 2: Task understanding
+        lines.append("\n## Step 2: Understand Your Task")
+        # Extract key info from task analysis
+        lines.append(task_analysis[:1500])  # Truncate if too long
+        lines.append("\n[Full analysis: `agent://guidance/task-analysis`]")
+
+        # Step 3: Begin implementation
+        lines.append("\n## Step 3: Begin Implementation")
+        lines.append("Follow the recommended approach from task analysis.")
+        lines.append("\n### Next Steps")
+        if has_dep_issues:
+            lines.append("1. Run the dependency install commands above")
+        lines.append("2. Review affected files")
+        lines.append("3. Make changes incrementally with commits")
+        lines.append("4. Verify using checklist")
+
+        # Resources cross-reference
+        lines.append("\n---")
+        lines.append("**Resources:**")
+        lines.append("- Verification checklist: `agent://guidance/verification-checklist`")
+        lines.append("- Codebase patterns: `agent://context/codebase-summary`")
+        lines.append("- Orchestration (if needed): Call `check_session` tool")
+
+        return "\n".join(lines)
 
     async def _tool_check_session(self, args: dict) -> str:
         """Check for existing session or start fresh."""

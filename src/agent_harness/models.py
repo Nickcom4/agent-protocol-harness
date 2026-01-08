@@ -270,3 +270,233 @@ class ExecutionPlan:
             parallel_groups=parallel_groups,
             sequential_order=sequential
         )
+
+
+# ============================================================
+# Dependency Detection Models (for WorkspaceMonitor)
+# ============================================================
+
+@dataclass
+class MissingPackage:
+    """A dependency that's declared but not installed."""
+    name: str
+    ecosystem: str  # "npm", "pip", "gem", "go", "cargo"
+    install_command: str  # Ready-to-run command, e.g., "npm install express"
+    detected_from: str  # Source file where reference was found, e.g., "package.json"
+    severity: str = "warning"  # "critical", "warning", "info"
+
+    def __post_init__(self):
+        """Validate severity."""
+        valid_severities = {"critical", "warning", "info"}
+        if self.severity not in valid_severities:
+            raise ValueError(f"severity must be one of {valid_severities}")
+
+
+@dataclass
+class OutdatedPackage:
+    """A dependency with available updates."""
+    name: str
+    ecosystem: str
+    current_version: str
+    latest_version: str
+    update_command: str  # e.g., "npm update express"
+
+    @property
+    def is_major_update(self) -> bool:
+        """Check if this is a major version bump."""
+        try:
+            current_major = int(self.current_version.split('.')[0].lstrip('v^~'))
+            latest_major = int(self.latest_version.split('.')[0].lstrip('v^~'))
+            return latest_major > current_major
+        except (ValueError, IndexError):
+            return False
+
+
+@dataclass
+class Conflict:
+    """Version conflict between dependencies."""
+    package: str
+    required_by: list[str]  # List of packages requiring this
+    conflicting_versions: list[str]  # The different versions required
+    resolution_hint: str = ""  # Optional hint for resolution
+
+
+@dataclass
+class DependencyReport:
+    """Comprehensive dependency analysis report."""
+    missing: list[MissingPackage] = field(default_factory=list)
+    outdated: list[OutdatedPackage] = field(default_factory=list)
+    unused: list[str] = field(default_factory=list)  # Declared but never imported
+    conflicts: list[Conflict] = field(default_factory=list)
+    health_score: int = 100  # 0-100
+
+    @property
+    def has_critical(self) -> bool:
+        """Check if any critical issues exist."""
+        return any(p.severity == "critical" for p in self.missing)
+
+    @property
+    def critical_count(self) -> int:
+        """Count of critical missing packages."""
+        return sum(1 for p in self.missing if p.severity == "critical")
+
+    @property
+    def warning_count(self) -> int:
+        """Count of warning-level missing packages."""
+        return sum(1 for p in self.missing if p.severity == "warning")
+
+    def get_install_commands_by_ecosystem(self) -> dict[str, list[str]]:
+        """Group install commands by ecosystem for batch execution."""
+        by_ecosystem: dict[str, list[str]] = {}
+        for pkg in self.missing:
+            if pkg.ecosystem not in by_ecosystem:
+                by_ecosystem[pkg.ecosystem] = []
+            by_ecosystem[pkg.ecosystem].append(pkg.name)
+        return by_ecosystem
+
+    def format_quick_install(self) -> str:
+        """Generate combined install command."""
+        lines = []
+        by_eco = self.get_install_commands_by_ecosystem()
+
+        if "npm" in by_eco:
+            lines.append(f"npm install {' '.join(by_eco['npm'])}")
+        if "pip" in by_eco:
+            lines.append(f"pip install {' '.join(by_eco['pip'])}")
+        if "go" in by_eco:
+            for pkg in by_eco["go"]:
+                lines.append(f"go get {pkg}")
+        if "cargo" in by_eco:
+            for pkg in by_eco["cargo"]:
+                lines.append(f"cargo add {pkg}")
+        if "gem" in by_eco:
+            lines.append(f"gem install {' '.join(by_eco['gem'])}")
+
+        return "\n".join(lines)
+
+
+# ============================================================
+# Task Analysis Models (for TaskAnalyzer)
+# ============================================================
+
+@dataclass
+class ComplexitySignals:
+    """Signals extracted from task complexity analysis."""
+    multi_system_count: int = 0  # Number of systems mentioned (frontend, backend, etc.)
+    scope_keywords: list[str] = field(default_factory=list)  # refactor, migrate, etc.
+    affected_files_estimate: int = 0
+    has_auth: bool = False
+    has_payments: bool = False
+    total_score: int = 0
+
+    @property
+    def is_simple(self) -> bool:
+        return self.total_score < 3 and self.multi_system_count <= 1
+
+    @property
+    def is_complex(self) -> bool:
+        return self.total_score >= 5 or self.multi_system_count >= 3
+
+
+@dataclass
+class ApproachRecommendation:
+    """Recommended approach for task execution."""
+    approach: str  # "direct", "checkpointed", "orchestrated"
+    reason: str
+    steps: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        """Validate approach."""
+        valid_approaches = {"direct", "checkpointed", "orchestrated"}
+        if self.approach not in valid_approaches:
+            raise ValueError(f"approach must be one of {valid_approaches}")
+
+
+@dataclass
+class TaskAnalysis:
+    """Complete analysis of a coding task."""
+    task_description: str = ""
+    task_type: str = ""  # "feature", "bugfix", "refactor", "test", "docs"
+    inferred_from: str = ""  # "git branch", "user input", "modified files"
+    complexity: ComplexitySignals = field(default_factory=ComplexitySignals)
+    recommendation: ApproachRecommendation = field(
+        default_factory=lambda: ApproachRecommendation(
+            approach="direct",
+            reason="Default recommendation"
+        )
+    )
+    verification_steps: list[str] = field(default_factory=list)
+    potential_pitfalls: list[str] = field(default_factory=list)
+    affected_files: list[str] = field(default_factory=list)
+
+
+# ============================================================
+# Package Manager Configuration (for WorkspaceMonitor)
+# ============================================================
+
+@dataclass
+class PackageManagerConfig:
+    """Configuration for a package manager ecosystem."""
+    name: str  # "npm", "pip", etc.
+    manifest_files: list[str]  # ["package.json"]
+    lock_files: list[str] = field(default_factory=list)  # ["package-lock.json"]
+    install_dir: str = ""  # "node_modules"
+    install_command_template: str = ""  # "{manager} install {package}"
+    check_command: str = ""  # Command to check if package installed
+
+
+# Predefined package manager configurations
+NPM_CONFIG = PackageManagerConfig(
+    name="npm",
+    manifest_files=["package.json"],
+    lock_files=["package-lock.json", "yarn.lock", "pnpm-lock.yaml"],
+    install_dir="node_modules",
+    install_command_template="npm install {package}",
+    check_command="npm list {package}"
+)
+
+PIP_CONFIG = PackageManagerConfig(
+    name="pip",
+    manifest_files=["pyproject.toml", "requirements.txt", "setup.py"],
+    lock_files=["uv.lock", "poetry.lock", "Pipfile.lock"],
+    install_dir=".venv/lib",
+    install_command_template="pip install {package}",
+    check_command="pip show {package}"
+)
+
+GO_CONFIG = PackageManagerConfig(
+    name="go",
+    manifest_files=["go.mod"],
+    lock_files=["go.sum"],
+    install_dir="",
+    install_command_template="go get {package}",
+    check_command="go list -m {package}"
+)
+
+CARGO_CONFIG = PackageManagerConfig(
+    name="cargo",
+    manifest_files=["Cargo.toml"],
+    lock_files=["Cargo.lock"],
+    install_dir="target",
+    install_command_template="cargo add {package}",
+    check_command="cargo tree -p {package}"
+)
+
+GEM_CONFIG = PackageManagerConfig(
+    name="gem",
+    manifest_files=["Gemfile"],
+    lock_files=["Gemfile.lock"],
+    install_dir="vendor/bundle",
+    install_command_template="gem install {package}",
+    check_command="gem list {package}"
+)
+
+# Export all configs
+PACKAGE_MANAGER_CONFIGS = {
+    "npm": NPM_CONFIG,
+    "pip": PIP_CONFIG,
+    "go": GO_CONFIG,
+    "cargo": CARGO_CONFIG,
+    "gem": GEM_CONFIG,
+}

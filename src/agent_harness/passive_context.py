@@ -9,6 +9,8 @@ import json
 import subprocess
 from typing import Dict, List, Optional
 
+from .workspace_monitor import WorkspaceMonitor
+
 
 class PassiveContextProvider:
     """Provides passive context enhancements via MCP resources."""
@@ -16,6 +18,28 @@ class PassiveContextProvider:
     def __init__(self, repo_root: Path):
         self.repo_root = repo_root
         self._cached_summary: Optional[str] = None
+        self._workspace_monitor: Optional[WorkspaceMonitor] = None
+        self._cache_time: float = 0
+        self._cache_ttl: float = 60.0  # seconds
+
+    @property
+    def workspace_monitor(self) -> WorkspaceMonitor:
+        """Lazy-load workspace monitor."""
+        if self._workspace_monitor is None:
+            self._workspace_monitor = WorkspaceMonitor(self.repo_root)
+        return self._workspace_monitor
+
+    def _is_cache_valid(self) -> bool:
+        """Check if cached summary is still valid."""
+        import time
+        if self._cached_summary is None:
+            return False
+        if time.time() - self._cache_time > self._cache_ttl:
+            return False
+        # Also check if workspace monitor indicates changes
+        if self._workspace_monitor and self._workspace_monitor.needs_rescan():
+            return False
+        return True
 
     def generate_codebase_summary(self) -> str:
         """
@@ -23,11 +47,17 @@ class PassiveContextProvider:
 
         Returns markdown summary that helps Claude understand the codebase.
         """
-        if self._cached_summary:
-            return self._cached_summary
+        import time
+
+        # Check cache validity
+        if self._is_cache_valid():
+            return self._cached_summary  # type: ignore
 
         # Detect tech stack
         tech_stack = self._detect_tech_stack()
+
+        # Get dependency health (quick status only - not full report)
+        dep_health = self._get_dependency_health_section()
 
         # Find key directories
         structure = self._analyze_structure()
@@ -43,6 +73,9 @@ class PassiveContextProvider:
 ## Tech Stack
 {tech_stack}
 
+## Dependency Health
+{dep_health}
+
 ## Structure
 {structure}
 
@@ -54,6 +87,7 @@ class PassiveContextProvider:
 """
 
         self._cached_summary = summary
+        self._cache_time = time.time()
         return summary
 
     def _detect_tech_stack(self) -> str:
@@ -245,6 +279,27 @@ class PassiveContextProvider:
 
         return "\n".join(conventions) if conventions else "- No standard tooling detected"
 
+    def _get_dependency_health_section(self) -> str:
+        """
+        Get dependency health for codebase summary.
+
+        Uses quick status to avoid performance impact on summary generation.
+        """
+        try:
+            quick_status = self.workspace_monitor.get_quick_status()
+
+            # If no issues, keep it minimal
+            if "All dependencies OK" in quick_status:
+                return "All dependencies installed"
+
+            # If issues, provide brief summary with link
+            return f"""{quick_status}
+
+*Read `agent://workspace/dependency-status` for details and install commands.*"""
+
+        except Exception:
+            return "*(Could not analyze dependencies)*"
+
     def assess_task_complexity(self, conversation_history: List[str]) -> Dict:
         """
         Real-time complexity assessment based on conversation.
@@ -375,3 +430,32 @@ class PassiveContextProvider:
             score = max(0, score - 2)
 
         return score
+
+    def get_dependency_status(self) -> Dict:
+        """
+        Get current dependency status with install commands.
+
+        Returns dict suitable for JSON serialization.
+        """
+        from dataclasses import asdict
+        report = self.workspace_monitor.scan_dependencies()
+        return asdict(report)
+
+    def get_health_report(self) -> str:
+        """
+        Get workspace health report in markdown format.
+
+        Includes dependency status, config issues, and recommendations.
+        """
+        return self.workspace_monitor.format_health_report()
+
+    def invalidate_cache(self) -> None:
+        """
+        Invalidate all cached data.
+
+        Call this when workspace files change significantly.
+        """
+        self._cached_summary = None
+        self._cache_time = 0
+        if self._workspace_monitor:
+            self._workspace_monitor.invalidate_cache()
